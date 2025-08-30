@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Nova Verus Miner - Advanced All-in-One Automated Verus Mining Suite
 # Author: MrNova420
-# Version: 2.2.1-nova
+# Version: 2.2.2-nova
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -22,7 +22,7 @@ BOX_MID="├──────────────────────�
 print_banner() {
   clear
   echo -e "${GREEN}$BOX_TOP"
-  echo -e "│      ${BOLD}Nova Verus Miner Suite v2.2.1${NC}${GREEN}      │"
+  echo -e "│      ${BOLD}Nova Verus Miner Suite v2.2.2${NC}${GREEN}      │"
   echo -e "│  The Best Automated Verus Mining Experience │"
   echo -e "│      Author: MrNova420                     │"
   echo -e "$BOX_BOT${NC}"
@@ -45,7 +45,7 @@ WATCHDOG_LOG="$LOG_DIR/watchdog.log"
 MINER_PID_FILE="$CONFIG_DIR/miner.pid"
 WATCHDOG_PID_FILE="$CONFIG_DIR/watchdog.pid"
 ACTIVE_MINER_FILE="$CONFIG_DIR/active_miner"
-SCRIPT_VERSION="2.2.1-nova"
+SCRIPT_VERSION="2.2.2-nova"
 GITHUB_REPO="MrNova420/NovaVerusMiner"
 DEFAULT_MINER_BIN_NAME="verus-miner"
 MINER_LIST_FILE="$CONFIG_DIR/miners.list"
@@ -158,6 +158,16 @@ termux_storage_setup() {
     STORAGE_STATUS="OK"
   fi
   mkdir -p "$CONFIG_DIR" "$LOG_DIR" "$BIN_DIR" "$DASH_DIR" "$MODULES_DIR" 2>/dev/null
+}
+
+# === Initial Boot Flow ===
+initial_setup() {
+  print_banner
+  detect_environment
+  check_dependencies
+  check_termux_api
+  termux_storage_setup
+  load_config
 }
 
 # === Miner Binary Download/Management ===
