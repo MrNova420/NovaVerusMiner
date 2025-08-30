@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Nova Verus Miner - Advanced All-in-One Automated Verus Mining Suite
 # Author: MrNova420
-# Version: 2.2.0-nova
+# Version: 2.2.1-nova
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -22,7 +22,7 @@ BOX_MID="├──────────────────────�
 print_banner() {
   clear
   echo -e "${GREEN}$BOX_TOP"
-  echo -e "│      ${BOLD}Nova Verus Miner Suite v2.2${NC}${GREEN}        │"
+  echo -e "│      ${BOLD}Nova Verus Miner Suite v2.2.1${NC}${GREEN}      │"
   echo -e "│  The Best Automated Verus Mining Experience │"
   echo -e "│      Author: MrNova420                     │"
   echo -e "$BOX_BOT${NC}"
@@ -45,7 +45,7 @@ WATCHDOG_LOG="$LOG_DIR/watchdog.log"
 MINER_PID_FILE="$CONFIG_DIR/miner.pid"
 WATCHDOG_PID_FILE="$CONFIG_DIR/watchdog.pid"
 ACTIVE_MINER_FILE="$CONFIG_DIR/active_miner"
-SCRIPT_VERSION="2.2.0-nova"
+SCRIPT_VERSION="2.2.1-nova"
 GITHUB_REPO="MrNova420/NovaVerusMiner"
 DEFAULT_MINER_BIN_NAME="verus-miner"
 MINER_LIST_FILE="$CONFIG_DIR/miners.list"
@@ -66,6 +66,7 @@ ROOT_ACCESS=0
 IS_TERMUX=0
 ACTIVE_MINER="$DEFAULT_MINER_BIN_NAME"
 MINERS=("verus-miner" "cpuminer" "xmrig")
+STORAGE_STATUS="Unknown"
 
 # Suggested pools
 SUGGESTED_POOLS=("na.luckpool.net:3956" "eu.luckpool.net:3956" "veruspool.com:13721" "vrsc.suprnova.cc:17777" "veruscoin.pro:3032")
@@ -140,11 +141,23 @@ check_termux_api() {
   fi
   return 0
 }
+
+# === Improved Termux Storage Setup (Never abort, always continue) ===
 termux_storage_setup() {
   if [ "$IS_TERMUX" -eq 1 ] && command -v termux-setup-storage >/dev/null 2>&1; then
-    termux-setup-storage || color_echo $YELLOW "[i] termux-setup-storage returned non-zero; ensure you grant permission in Android."
-    color_echo $GREEN "[✓] Storage access requested."
+    termux-setup-storage
+    if [ $? -ne 0 ]; then
+      color_echo $YELLOW "[i] termux-setup-storage failed or permission not granted."
+      color_echo $YELLOW "To fix: Grant storage permission in Android Termux app settings."
+      STORAGE_STATUS="Limited"
+    else
+      color_echo $GREEN "[✓] Storage access requested."
+      STORAGE_STATUS="OK"
+    fi
+  else
+    STORAGE_STATUS="OK"
   fi
+  mkdir -p "$CONFIG_DIR" "$LOG_DIR" "$BIN_DIR" "$DASH_DIR" "$MODULES_DIR" 2>/dev/null
 }
 
 # === Miner Binary Download/Management ===
@@ -162,7 +175,6 @@ miner_download_url_for_arch() {
       esac
       ;;
     cpuminer)
-      # Example URL, update for real releases:
       case "$arch" in
         arm64|x86_64|x86) echo "https://github.com/JayDDee/cpuminer-opt/releases/latest/download/cpuminer";;
         *) echo "";;
@@ -469,6 +481,10 @@ restart_miner() {
 miner_status() {
   print_banner
   load_config
+  echo -e "${YELLOW}Storage Status: $STORAGE_STATUS"
+  if [ "$STORAGE_STATUS" = "Limited" ]; then
+    echo -e "${RED}Warning: Storage access is limited! Some features may not work. Grant permission in Termux app settings if needed.${NC}"
+  fi
   if [ -f "$MINER_PID_FILE" ]; then
     local pid
     pid=$(cat "$MINER_PID_FILE" 2>/dev/null || echo "")
@@ -528,23 +544,26 @@ add_miner_menu() {
 show_dashboard() {
   print_banner
   load_config
+  echo -e "${YELLOW}Storage Status: $STORAGE_STATUS"
+  if [ "$STORAGE_STATUS" = "Limited" ]; then
+    echo -e "${RED}Warning: Storage access is limited! Some features may not work. Grant permission in Termux app settings if needed.${NC}"
+  fi
   echo -e "${CYAN}Mining Stats Dashboard:${NC}"
   echo "$BOX_TOP"
   local hashrate accepted rejected errors coins termux_status
-  # Check Termux API status
   if [ "$IS_TERMUX" -eq 1 ] && ! command -v termux-notification >/dev/null 2>&1; then
     termux_status="$termux_api_warning"
   else
     termux_status="OK"
   fi
-
+  printf "│ %-18s: %-20s │\n" "Storage Status" "$STORAGE_STATUS"
+  printf "│ %-18s: %-20s │\n" "Termux API" "$termux_status"
   hashrate=$(tail -n 100 "$MINER_LOG" | grep -oE '[0-9]+(\.[0-9]+)?[kM]?H/s' | tail -n1)
   [ -z "$hashrate" ] && hashrate="N/A"
   accepted=$(grep -c -i 'accepted' "$MINER_LOG" 2>/dev/null || echo 0)
   rejected=$(grep -c -i 'rejected' "$MINER_LOG" 2>/dev/null || echo 0)
   errors=$(grep -c -i 'error' "$MINER_LOG" 2>/dev/null || echo 0)
   coins=$(grep -c -i 'found' "$MINER_LOG" 2>/dev/null || echo 0)
-  printf "│ %-18s: %-20s │\n" "Termux API" "$termux_status"
   printf "│ %-18s: %-20s │\n" "Hashrate" "$hashrate"
   printf "│ %-18s: %-20s │\n" "Accepted" "$accepted"
   printf "│ %-18s: %-20s │\n" "Rejected" "$rejected"
@@ -572,13 +591,11 @@ watchdog_loop() {
   local INTERVAL=60
   color_echo $CYAN "[*] Watchdog started (interval ${INTERVAL}s)."
   while true; do
-    # Miner alive check
     if [ ! -f "$MINER_PID_FILE" ] || ! (pid=$(cat "$MINER_PID_FILE" 2>/dev/null) && kill -0 "$pid" 2>/dev/null); then
       color_echo $RED "[!] Miner process not found, attempting restart..."
       restart_miner && notify_user "Miner restarted by watchdog" || notify_user "Watchdog failed to restart miner"
       sleep 5
     fi
-    # Termux checks: battery/temp when available
     if [ "$IS_TERMUX" -eq 1 ] && command -v termux-battery-status >/dev/null 2>&1; then
       battery_info="$(termux-battery-status 2>/dev/null || echo '{}')"
       battery_level=$(echo "$battery_info" | jq '.percentage' 2>/dev/null || echo 100)
@@ -589,7 +606,6 @@ watchdog_loop() {
         notify_user "Miner paused: battery $battery_level%"
       fi
     fi
-    # Temperature check (Termux sensor)
     if [ "$IS_TERMUX" -eq 1 ] && command -v termux-sensor >/dev/null 2>&1; then
       cpu_temp=$(termux-sensor | jq -r '.[] | select(.name=="cpu_temperature") | .value' 2>/dev/null || echo "")
       if [ -n "$cpu_temp" ]; then
@@ -600,7 +616,6 @@ watchdog_loop() {
         fi
       fi
     fi
-    # Disk space
     avail=$(df -k "$CONFIG_DIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
     if [ -n "$avail" ] && [ "$avail" -lt 10240 ]; then
       notify_user "Low disk space: ${avail}KB in $CONFIG_DIR"
@@ -714,6 +729,10 @@ show_main_menu() {
   load_modules
   while true; do
     print_banner
+    echo -e "${YELLOW}Storage Status: $STORAGE_STATUS"
+    if [ "$STORAGE_STATUS" = "Limited" ]; then
+      echo -e "${RED}Warning: Storage access is limited! Some features may not work. Grant permission in Termux app settings if needed.${NC}"
+    fi
     echo -e "${CYAN}1) Configure Wallet & Pool"
     echo -e "2) Configure Mining Mode & Threads"
     echo -e "3) Start Miner"
@@ -731,7 +750,6 @@ show_main_menu() {
     echo -e "15) Mining Stats Dashboard"
     echo -e "16) Switch Miner"
     echo -e "17) Add Miner"
-    # Extra modules can add items here using a global array EXTRA_MENU_ITEMS
     if [[ -n "${EXTRA_MENU_ITEMS[*]:-}" ]]; then
       for i in "${!EXTRA_MENU_ITEMS[@]}"; do
         echo -e "${CYAN}$((18+i))) ${EXTRA_MENU_ITEMS[$i]}"
@@ -741,7 +759,7 @@ show_main_menu() {
     read -rp "Choose an option: " choice
     case $choice in
       1) run_wizard ;;
-      2) run_wizard ;; # Also allows changing mode/threads via wizard
+      2) run_wizard ;;
       3) start_miner; notify_user "Miner started" "Nova Verus Miner" ;;
       4) stop_miner; notify_user "Miner stopped" "Nova Verus Miner" ;;
       5) restart_miner; notify_user "Miner restarted" "Nova Verus Miner" ;;
@@ -757,7 +775,6 @@ show_main_menu() {
       15) show_dashboard ;;
       16) miner_switch_menu ;;
       17) add_miner_menu ;;
-      # Module menu items by index
       *)
         if [[ -n "${EXTRA_MENU_ITEMS[*]:-}" ]] && [[ "$choice" =~ ^[0-9]+$ ]] && (( choice > 17 && choice <= 17+${#EXTRA_MENU_ITEMS[@]} )); then
           local mod_idx=$((choice-18))
@@ -771,16 +788,6 @@ show_main_menu() {
     esac
     pause
   done
-}
-
-# === Initial Boot Flow ===
-initial_setup() {
-  print_banner
-  detect_environment
-  check_dependencies
-  check_termux_api
-  termux_storage_setup
-  load_config
 }
 
 # === Entry Point ===
