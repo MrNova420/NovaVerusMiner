@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Nova Verus Miner - Advanced All-in-One Automated Verus Mining Suite
 # Author: MrNova420
-# Version: 2.1.0-nova
+# Version: 2.2.0-nova
 
 set -euo pipefail
 IFS=$'\n\t'
@@ -22,7 +22,7 @@ BOX_MID="├──────────────────────�
 print_banner() {
   clear
   echo -e "${GREEN}$BOX_TOP"
-  echo -e "│      ${BOLD}Nova Verus Miner Suite v2.1${NC}${GREEN}        │"
+  echo -e "│      ${BOLD}Nova Verus Miner Suite v2.2${NC}${GREEN}        │"
   echo -e "│  The Best Automated Verus Mining Experience │"
   echo -e "│      Author: MrNova420                     │"
   echo -e "$BOX_BOT${NC}"
@@ -37,6 +37,7 @@ CONFIG_DIR="$HOME_DIR/.nova_verus_data"
 LOG_DIR="$CONFIG_DIR/logs"
 BIN_DIR="$CONFIG_DIR/miner_bin"
 DASH_DIR="$CONFIG_DIR/dashboard"
+MODULES_DIR="$CONFIG_DIR/modules"
 CONFIG_FILE="$CONFIG_DIR/config.conf"
 RUN_INFO_FILE="$CONFIG_DIR/run.info"
 MINER_LOG="$LOG_DIR/miner.log"
@@ -44,12 +45,12 @@ WATCHDOG_LOG="$LOG_DIR/watchdog.log"
 MINER_PID_FILE="$CONFIG_DIR/miner.pid"
 WATCHDOG_PID_FILE="$CONFIG_DIR/watchdog.pid"
 ACTIVE_MINER_FILE="$CONFIG_DIR/active_miner"
-SCRIPT_VERSION="2.1.0-nova"
+SCRIPT_VERSION="2.2.0-nova"
 GITHUB_REPO="MrNova420/NovaVerusMiner"
 DEFAULT_MINER_BIN_NAME="verus-miner"
 MINER_LIST_FILE="$CONFIG_DIR/miners.list"
 
-mkdir -p "$CONFIG_DIR" "$LOG_DIR" "$BIN_DIR" "$DASH_DIR"
+mkdir -p "$CONFIG_DIR" "$LOG_DIR" "$BIN_DIR" "$DASH_DIR" "$MODULES_DIR"
 
 # === Globals (default) ===
 WALLET=""
@@ -131,9 +132,10 @@ check_dependencies() {
 }
 
 # === Termux API ===
+termux_api_warning="TERMUX API NOT AVAILABLE - limited notifications, battery/temp monitoring. See https://github.com/termux-play-store/termux-apps/issues/29"
 check_termux_api() {
   if [ "$IS_TERMUX" -eq 1 ] && ! command -v termux-notification >/dev/null 2>&1; then
-    color_echo $YELLOW "[!] termux-api not installed. Some features will be limited."
+    color_echo $YELLOW "[!] $termux_api_warning"
     return 1
   fi
   return 0
@@ -167,10 +169,10 @@ miner_download_url_for_arch() {
       esac
       ;;
     xmrig)
-      # Example URL, update for real releases:
       case "$arch" in
         arm64) echo "https://github.com/xmrig/xmrig/releases/latest/download/xmrig-arm64";;
         x86_64) echo "https://github.com/xmrig/xmrig/releases/latest/download/xmrig-x86_64";;
+        x86) echo "https://github.com/xmrig/xmrig/releases/latest/download/xmrig-x86";;
         *) echo "";;
       esac
       ;;
@@ -180,20 +182,25 @@ miner_download_url_for_arch() {
 download_miner_binary() {
   local miner="$1"
   local arch="$2"
-  color_echo $CYAN "[*] Downloading $miner binary for arch $arch..."
-  local url
+  local url alt_url
   url="$(miner_download_url_for_arch "$miner" "$arch")"
-  if [ -z "$url" ]; then
-    color_echo $RED "[!] Unsupported arch or no URL available for $miner ($arch). Place binary manually in $BIN_DIR/$miner"
-    return 1
-  fi
-  local out="$BIN_DIR/$miner"
-  if curl -fSL --retry 3 -o "$out" "$url"; then
-    chmod +x "$out"
-    color_echo $GREEN "[✓] $miner binary downloaded to $out"
+  alt_url="https://github.com/$GITHUB_REPO/releases/latest/download/$miner-$arch"
+  color_echo $CYAN "[*] Attempting to download $miner ($arch)..."
+  if curl -fSL --retry 3 -o "$BIN_DIR/$miner" "$url"; then
+    chmod +x "$BIN_DIR/$miner"
+    color_echo $GREEN "[✓] Downloaded $miner using curl."
+    return 0
+  elif wget -O "$BIN_DIR/$miner" "$url"; then
+    chmod +x "$BIN_DIR/$miner"
+    color_echo $GREEN "[✓] Downloaded $miner using wget."
+    return 0
+  elif curl -fSL --retry 3 -o "$BIN_DIR/$miner" "$alt_url"; then
+    chmod +x "$BIN_DIR/$miner"
+    color_echo $GREEN "[✓] Downloaded $miner using alternate URL."
     return 0
   else
-    color_echo $RED "[!] Failed to download $miner from $url"
+    color_echo $RED "[!] All download methods failed for $miner ($arch)."
+    color_echo $YELLOW "Place $miner in $BIN_DIR manually, or check your internet."
     return 1
   fi
 }
@@ -335,7 +342,7 @@ run_wizard() {
       color_echo $RED "Invalid choice. Try again."
     fi
   done
-  # Booster Modes
+  # Booster Modes (compat per miner)
   echo -e "${YELLOW}Mining Modes:"
   echo "  1) Low Power (save battery)"
   echo "  2) Balanced (recommended)"
@@ -344,9 +351,9 @@ run_wizard() {
   while true; do
     read -rp "Choose mining mode [1-4]: " mode_choice
     case $mode_choice in
-      1) MODE="lowpower"; THREADS=1; MINER_ARGS="--lowpower"; break;;
+      1) MODE="lowpower"; THREADS=1; MINER_ARGS=""; break;;
       2) MODE="balanced"; THREADS=$(( (nproc || echo 2) / 2 )); MINER_ARGS=""; break;;
-      3) MODE="boosted"; THREADS=$(nproc || echo 2); MINER_ARGS="--max-performance"; break;;
+      3) MODE="boosted"; THREADS=$(nproc || echo 2); MINER_ARGS=""; break;;
       4) MODE="custom"; read -rp "Threads: " THREADS; validate_threads || THREADS=2; read -rp "Extra miner args: " MINER_ARGS; break;;
       *) color_echo $RED "Invalid choice. Try again.";;
     esac
@@ -399,13 +406,27 @@ start_miner() {
   local cmd=""
   case "$ACTIVE_MINER" in
     verus-miner)
+      case "$MODE" in
+        lowpower) MINER_ARGS="--lowpower";;
+        boosted) MINER_ARGS="--max-performance";;
+        balanced|custom) ;;
+      esac
       cmd="\"$bin\" --wallet \"$WALLET\" --pool \"$POOL\" --threads \"$THREADS\" $MINER_ARGS"
       ;;
     cpuminer)
+      case "$MODE" in
+        lowpower) MINER_ARGS="-t 1";;
+        boosted) MINER_ARGS="-t $THREADS";;
+        balanced|custom) ;;
+      esac
       cmd="\"$bin\" -a verus -o stratum+tcp://$POOL -u \"$WALLET\" $MINER_ARGS"
       ;;
     xmrig)
-      # For XMRig, may need different args for Verus
+      case "$MODE" in
+        lowpower) MINER_ARGS="--threads=1";;
+        boosted) MINER_ARGS="--threads=$THREADS";;
+        balanced|custom) ;;
+      esac
       cmd="\"$bin\" -o $POOL -u \"$WALLET\" $MINER_ARGS"
       ;;
     *)
@@ -509,36 +530,26 @@ show_dashboard() {
   load_config
   echo -e "${CYAN}Mining Stats Dashboard:${NC}"
   echo "$BOX_TOP"
-  local hashrate accepted rejected cpu_usage battery temp uptime errors
-  # Hashrate
+  local hashrate accepted rejected errors coins termux_status
+  # Check Termux API status
+  if [ "$IS_TERMUX" -eq 1 ] && ! command -v termux-notification >/dev/null 2>&1; then
+    termux_status="$termux_api_warning"
+  else
+    termux_status="OK"
+  fi
+
   hashrate=$(tail -n 100 "$MINER_LOG" | grep -oE '[0-9]+(\.[0-9]+)?[kM]?H/s' | tail -n1)
   [ -z "$hashrate" ] && hashrate="N/A"
   accepted=$(grep -c -i 'accepted' "$MINER_LOG" 2>/dev/null || echo 0)
   rejected=$(grep -c -i 'rejected' "$MINER_LOG" 2>/dev/null || echo 0)
   errors=$(grep -c -i 'error' "$MINER_LOG" 2>/dev/null || echo 0)
-  uptime=$(ps -o etimes= -p "$(cat "$MINER_PID_FILE" 2>/dev/null)" 2>/dev/null || echo "N/A")
-  # CPU usage
-  cpu_usage=$(ps -p "$(cat "$MINER_PID_FILE" 2>/dev/null)" -o %cpu= 2>/dev/null || echo "N/A")
-  # Battery/Temp (Termux)
-  if [ "$IS_TERMUX" -eq 1 ] && command -v termux-battery-status >/dev/null 2>&1; then
-    battery="$(termux-battery-status | jq '.percentage' 2>/dev/null || echo "N/A")"
-  else
-    battery="N/A"
-  fi
-  if [ "$IS_TERMUX" -eq 1 ] && command -v termux-sensor >/dev/null 2>&1; then
-    temp=$(termux-sensor | jq -r '.[] | select(.name=="cpu_temperature") | .value' 2>/dev/null || echo "N/A")
-  else
-    temp="N/A"
-  fi
-  printf "│ %-13s: %-15s │\n" "Active Miner" "$ACTIVE_MINER"
-  printf "│ %-13s: %-15s │\n" "Hashrate" "$hashrate"
-  printf "│ %-13s: %-15s │\n" "Accepted" "$accepted"
-  printf "│ %-13s: %-15s │\n" "Rejected" "$rejected"
-  printf "│ %-13s: %-15s │\n" "Errors" "$errors"
-  printf "│ %-13s: %-15s │\n" "CPU Usage" "$cpu_usage%"
-  printf "│ %-13s: %-15s │\n" "Uptime (sec)" "$uptime"
-  printf "│ %-13s: %-15s │\n" "Battery" "$battery%"
-  printf "│ %-13s: %-15s │\n" "CPU Temp" "$temp°C"
+  coins=$(grep -c -i 'found' "$MINER_LOG" 2>/dev/null || echo 0)
+  printf "│ %-18s: %-20s │\n" "Termux API" "$termux_status"
+  printf "│ %-18s: %-20s │\n" "Hashrate" "$hashrate"
+  printf "│ %-18s: %-20s │\n" "Accepted" "$accepted"
+  printf "│ %-18s: %-20s │\n" "Rejected" "$rejected"
+  printf "│ %-18s: %-20s │\n" "Errors" "$errors"
+  printf "│ %-18s: %-20s │\n" "Coins Found" "$coins"
   echo "$BOX_BOT"
   pause
 }
@@ -691,8 +702,16 @@ import_config() {
   fi
 }
 
+# === Module Loader ===
+load_modules() {
+  for mod in "$MODULES_DIR"/*.sh; do
+    [ -f "$mod" ] && source "$mod"
+  done
+}
+
 # === Main Menu ===
 show_main_menu() {
+  load_modules
   while true; do
     print_banner
     echo -e "${CYAN}1) Configure Wallet & Pool"
@@ -712,6 +731,12 @@ show_main_menu() {
     echo -e "15) Mining Stats Dashboard"
     echo -e "16) Switch Miner"
     echo -e "17) Add Miner"
+    # Extra modules can add items here using a global array EXTRA_MENU_ITEMS
+    if [[ -n "${EXTRA_MENU_ITEMS[*]:-}" ]]; then
+      for i in "${!EXTRA_MENU_ITEMS[@]}"; do
+        echo -e "${CYAN}$((18+i))) ${EXTRA_MENU_ITEMS[$i]}"
+      done
+    fi
     echo -e "0) Exit${NC}"
     read -rp "Choose an option: " choice
     case $choice in
@@ -732,8 +757,17 @@ show_main_menu() {
       15) show_dashboard ;;
       16) miner_switch_menu ;;
       17) add_miner_menu ;;
-      0) stop_miner; watchdog_stop; color_echo $GREEN "Goodbye!"; exit 0 ;;
-      *) color_echo $RED "Invalid option. Try again." ;;
+      # Module menu items by index
+      *)
+        if [[ -n "${EXTRA_MENU_ITEMS[*]:-}" ]] && [[ "$choice" =~ ^[0-9]+$ ]] && (( choice > 17 && choice <= 17+${#EXTRA_MENU_ITEMS[@]} )); then
+          local mod_idx=$((choice-18))
+          "${EXTRA_MENU_FUNCS[$mod_idx]}"
+        elif [[ "$choice" == "0" ]]; then
+          stop_miner; watchdog_stop; color_echo $GREEN "Goodbye!"; exit 0
+        else
+          color_echo $RED "Invalid option. Try again."
+        fi
+      ;;
     esac
     pause
   done
